@@ -10,7 +10,7 @@ use futures_util::future;
 use sqlx_rt::{sleep, spawn, timeout};
 use std::cmp;
 use std::mem;
-use std::ops::Add;
+use std::ops::{Add, Sub};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -198,6 +198,10 @@ impl<DB: Database> SharedPool<DB> {
                         Ok(None) => continue,
                         Err(e) => Err(e),
                     };
+                }
+                let time = Instant::now();
+                if (time < connect_deadline) {
+                    sleep(connect_deadline.sub(Instant::now())).await;
                 }
                 wait = std::cmp::min(wait * 2, self.options.connect_timeout.as_secs());
                 connect_deadline = connect_deadline.add(Duration::from_secs(wait));
