@@ -10,11 +10,12 @@ use futures_util::future;
 use sqlx_rt::{sleep, spawn, timeout};
 use std::cmp;
 use std::mem;
+use std::ops::Add;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::task::Context;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) struct SharedPool<DB: Database> {
     pub(super) connect_options: <DB::Connection as Connection>::Options,
@@ -185,14 +186,23 @@ impl<DB: Database> SharedPool<DB> {
                 }
             }
 
-            if let Some(guard) = self.try_increment_size() {
+            let mut wait = 1;
+            let mut connect_deadline = start.add(Duration::from_secs(wait));
+            let mut error = Result::Err(Error::PoolTimedOut);
+            while Instant::now() < deadline {
                 // pool has slots available; open a new connection
-                match self.connection(deadline, guard).await {
-                    Ok(Some(conn)) => return Ok(conn),
-                    // [size] is internally decremented on _retry_ and _error_
-                    Ok(None) => continue,
-                    Err(e) => return Err(e),
+                if let Some(guard) = self.try_increment_size() {
+                    error = match self.connection(connect_deadline, guard).await {
+                        Ok(Some(conn)) => return Ok(conn),
+                        // [size] is internally decremented on _retry_ and _error_
+                        Ok(None) => continue,
+                        Err(e) => Err(e),
+                    };
                 }
+                wait = std::cmp::min(wait * 2, self.options.connect_timeout.as_secs());
+                connect_deadline = connect_deadline.add(Duration::from_secs(wait));
+
+                return error;
             }
 
             // Wait for a connection to become available (or we are allowed to open a new one)
