@@ -193,19 +193,23 @@ impl<DB: Database> SharedPool<DB> {
                 // pool has slots available; open a new connection
                 if let Some(guard) = self.try_increment_size() {
                     error = match self.connection(connect_deadline, guard).await {
-                        Ok(Some(conn)) => return Ok(conn),
+                        // Ok(Some(conn)) => return Ok(conn),
+                        Ok(_) => continue,
                         // [size] is internally decremented on _retry_ and _error_
-                        Ok(None) => continue,
+                        // Ok(None) => continue,
                         Err(e) => Err(e),
                     };
                 }
                 let time = Instant::now();
-                if (time < connect_deadline) {
+                if time < connect_deadline {
                     sleep(connect_deadline.sub(Instant::now())).await;
                 }
-                wait = std::cmp::min(wait * 2, self.options.connect_timeout.as_secs());
-                connect_deadline = connect_deadline.add(Duration::from_secs(wait));
+                wait *= 2;
+                connect_deadline =
+                    std::cmp::min(connect_deadline.add(Duration::from_secs(wait)), deadline);
+            }
 
+            if error.is_err() {
                 return error;
             }
 
